@@ -2,12 +2,13 @@
 
 ## Context
 
-The goal is a macOS menu bar item that shows today's Anthropic API spend, refreshing automatically. The user has an Admin API key and prefers the xbar/SwiftBar approach (a simple Python script) over a full native Swift app. This avoids Xcode entirely while still integrating natively into the macOS menu bar.
+The goal is a macOS menu bar item that shows today's Anthropic API spend, refreshing automatically. The user has an Admin API key and prefers the SwiftBar approach (a simple Python script) over a full native Swift app. This avoids Xcode entirely while still integrating natively into the macOS menu bar. SwiftBar is chosen over xbar for its active maintenance and Homebrew availability.
 
 ## Prerequisites (user actions before we code)
 
-1. Install **xbar** from https://xbarapp.com (free, open source)
-2. Store the Admin API key in a config file:
+1. Install **SwiftBar**: `brew install swiftbar`
+2. On first launch, SwiftBar prompts for a Plugin Folder — point it at this repo (`/Users/brandon/workspace/ClaudeUsageMeter`) or a dedicated folder; if using a separate folder, a symlink is needed (see below)
+3. Store the Admin API key in a config file:
    ```
    mkdir -p ~/.config/claude-cost
    echo 'sk-ant-admin...' > ~/.config/claude-cost/admin_key
@@ -32,21 +33,24 @@ The plugin script. The `5m` in the filename tells xbar to refresh every 5 minute
 
 **No third-party dependencies** — uses only Python stdlib (`urllib`, `json`, `datetime`, `os`).
 
+**SwiftBar-specific metadata** (in script header comments):
+- `swiftbar.refreshOnOpen=true` — refreshes data before showing the dropdown
+- `swiftbar.hideSwiftBar=true` — hides the "Open SwiftBar" clutter item from the menu
+
 **Error states** (shown in menu bar):
 - `⚠ No key` — config file missing, with setup instructions in dropdown
 - `⚠ API Error` — HTTP error with status code shown in dropdown
 - `⚠ Network` — timeout or connection failure
 
-### Symlink to xbar plugins directory
+### Pointing SwiftBar at this repo (preferred)
 
-After creating the script:
+The simplest setup: on first SwiftBar launch, set the Plugin Folder directly to this repo directory. No symlink needed.
+
+If the plugin folder is already set elsewhere, symlink instead:
 ```bash
 chmod +x claude-cost.5m.py
-ln -sf "$PWD/claude-cost.5m.py" \
-  ~/Library/Application\ Support/xbar/plugins/claude-cost.5m.py
+ln -sf "$PWD/claude-cost.5m.py" /path/to/swiftbar-plugins/claude-cost.5m.py
 ```
-
-This way, edits in the workspace are live immediately without copying.
 
 ## API Details
 
