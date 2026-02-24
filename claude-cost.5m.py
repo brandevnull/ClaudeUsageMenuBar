@@ -12,7 +12,6 @@ import json
 import os
 import urllib.request
 import urllib.error
-import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 CONFIG_FILE = os.path.expanduser("~/.config/claude-cost/admin_key")
@@ -30,20 +29,22 @@ def get_api_key():
 
 
 def fetch_cost(api_key):
-    now_local = datetime.now().astimezone()
-    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
+    now_utc = datetime.now(timezone.utc)
+    # Request the last 2 days so we always get at least one completed UTC day.
+    # The cost API only returns completed buckets; the in-progress day is never
+    # included. Using ending_at=now avoids requesting future timestamps.
+    two_days_ago = (now_utc - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    starting_at = today_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    ending_at = today_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    starting_at = two_days_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
+    ending_at = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    params = urllib.parse.urlencode([
-        ("starting_at", starting_at),
-        ("ending_at", ending_at),
-        ("bucket_width", "1d"),
-        ("group_by[]", "description"),
-    ])
-    url = f"{API_BASE}/v1/organizations/cost_report?{params}"
+    url = (
+        f"{API_BASE}/v1/organizations/cost_report"
+        f"?starting_at={starting_at}"
+        f"&ending_at={ending_at}"
+        f"&bucket_width=1d"
+        f"&group_by[]=description"
+    )
 
     req = urllib.request.Request(url, headers={
         "x-api-key": api_key,
@@ -56,16 +57,17 @@ def fetch_cost(api_key):
 
 
 def shorten_model(model):
-    """Turn e.g. 'claude-opus-4-6' into 'Opus 4.6'"""
-    name = model.lower()
-    name = name.replace("claude-", "")
-    # Normalize version separators: last two dash-separated segments that are
-    # digits form the version (e.g. "4-6" -> "4.6", "3-5" -> "3.5")
+    """Turn e.g. 'claude-opus-4-6' into 'Opus 4.6', stripping date stamps."""
+    name = model.lower().replace("claude-", "")
     parts = name.split("-")
+    # Drop trailing 8-digit date stamp (e.g. 20251001)
+    while parts and parts[-1].isdigit() and len(parts[-1]) == 8:
+        parts.pop()
+    # Collect trailing 1-2 digit version segments (e.g. "4", "6" → "4.6")
     version_parts = []
-    while parts and parts[-1].isdigit():
+    while parts and parts[-1].isdigit() and len(parts[-1]) <= 2:
         version_parts.insert(0, parts.pop())
-    version = ".".join(version_parts) if version_parts else ""
+    version = ".".join(version_parts)
     family = " ".join(p.capitalize() for p in parts)
     return f"{family} {version}".strip() if version else family.strip()
 
@@ -107,23 +109,32 @@ def main():
         print(str(e))
         return
 
-    # Sum totals and build per-model breakdown
+    buckets = data.get("data", [])
+    if not buckets:
+        print("$0.00")
+        print("---")
+        print("No cost data available yet")
+        return
+
+    # Take the most recent completed bucket
+    bucket = buckets[-1]
+    bucket_start = bucket["starting_at"][:10]   # "YYYY-MM-DD"
+    bucket_end   = bucket["ending_at"][:10]
+
     total_cents = 0.0
     by_model = {}
-
-    for bucket in data.get("data", []):
-        for result in bucket.get("results", []):
-            cents = float(result.get("amount", "0"))
-            total_cents += cents
-            model = result.get("model") or "Other"
-            by_model[model] = by_model.get(model, 0.0) + cents
+    for result in bucket.get("results", []):
+        cents = float(result.get("amount", "0"))
+        total_cents += cents
+        model = result.get("model") or "Other"
+        by_model[model] = by_model.get(model, 0.0) + cents
 
     total_usd = total_cents / 100.0
 
     # Menu bar title
     print(f"${total_usd:.2f}")
     print("---")
-    print(f"Today's Claude API Cost")
+    print(f"Claude API Cost  ({bucket_start} UTC)")
     print("---")
 
     if by_model:
@@ -133,7 +144,7 @@ def main():
                 name = shorten_model(model)
                 print(f"${usd:.4f}  {name}")
     else:
-        print("No usage recorded yet today")
+        print("No usage recorded")
 
     print("---")
     print(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
